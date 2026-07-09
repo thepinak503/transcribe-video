@@ -7,7 +7,7 @@ set -Euo pipefail
 # --- Defaults ---
 MODEL="$HOME/models/ggml-large-v3-turbo-q5_0.bin"
 MODEL_URL="https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3-turbo-q5_0.bin"
-THREADS=8
+THREADS="$(nproc)"
 LANGUAGE="auto"
 PARALLEL=1
 FORMATS="srt,txt"
