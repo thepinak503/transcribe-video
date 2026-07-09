@@ -7,7 +7,7 @@ set -Euo pipefail
 # --- Defaults ---
 MODEL="$HOME/models/ggml-large-v3-turbo-q5_0.bin"
 MODEL_URL="https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3-turbo-q5_0.bin"
-THREADS=4
+THREADS=8
 LANGUAGE="auto"
 PARALLEL=1
 FORMATS="srt,txt"
@@ -23,7 +23,7 @@ SKIP_EXISTING=true
 PRINT_PROGRESS=false
 VAD=false
 VAD_MODEL=""
-NO_GPU=false
+NO_GPU=true
 NO_FLASH_ATTN=false
 TRANSLATE=false
 FFMPEG_CONVERT=true
