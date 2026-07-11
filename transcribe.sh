@@ -334,14 +334,6 @@ for target in "${TARGETS[@]}"; do
     done < <(find_files "$target")
 done
 
-# Collect files
-all_files=()
-for target in "${TARGETS[@]}"; do
-    while IFS= read -r f; do
-        all_files+=("$f")
-    done < <(find_files "$target")
-done
-
 # Sort by file size (smallest first) — quicker files transcribed first
 if [ "${#all_files[@]}" -gt 1 ]; then
     sorted=()
