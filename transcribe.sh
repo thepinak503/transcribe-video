@@ -27,6 +27,7 @@ NO_GPU=true
 NO_FLASH_ATTN=false
 TRANSLATE=false
 FFMPEG_CONVERT=true
+CURRENT_TMP_WAV=""
 
 # --- Colors ---
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[0;33m'
@@ -42,8 +43,9 @@ cleanup() {
     local pids
     pids=$(jobs -rp 2>/dev/null || true)
     [ -n "$pids" ] && kill $pids 2>/dev/null || true
+    [ -n "$CURRENT_TMP_WAV" ] && [ -f "$CURRENT_TMP_WAV" ] && rm -f "$CURRENT_TMP_WAV"
 }
-trap cleanup EXIT
+trap cleanup EXIT INT TERM
 
 usage() {
     cat <<EOF
@@ -225,6 +227,7 @@ run_whisper() {
     if [ "$FFMPEG_CONVERT" = true ] && NEEDS_CONVERT "$ext"; then
         command -v ffmpeg &>/dev/null || { err "ffmpeg required for $ext files. Install ffmpeg or use --no-convert."; return 1; }
         tmp_wav=$(conv_to_wav "$f")
+        CURRENT_TMP_WAV="$tmp_wav"
         f="$tmp_wav"
     fi
     local -a cmd=("$WHISPER_BIN" -t "$THREADS" -f "$f" -m "$MODEL")
@@ -269,6 +272,7 @@ run_whisper() {
     local rc=$?
     set -e
     [ -n "$tmp_wav" ] && rm -f "$tmp_wav"
+    CURRENT_TMP_WAV=""
     if [ "$rc" -eq 0 ] && [ -z "$OUTDIR" ]; then
         local old_suffix
         for old_suffix in srt txt vtt json tsv lrc csv; do
@@ -365,12 +369,13 @@ if [ "$PARALLEL" -gt 1 ]; then
     temp_dir=$(mktemp -d)
     trap 'cleanup; rm -rf "$temp_dir"' EXIT
     export TEMP_DIR="$temp_dir"
-    export WHISPER_BIN FFMPEG_CONVERT OUTDIR MODEL LANGUAGE THREADS FORMATS MIN_SIZE MAX_SIZE
+    export WHISPER_BIN FFMPEG_CONVERT OUTDIR MODEL LANGUAGE THREADS FORMATS MIN_SIZE MAX_SIZE CURRENT_TMP_WAV
     export SKIP_EXISTING QUIET LOG_FILE VAD VAD_MODEL TRANSLATE NO_GPU NO_FLASH_ATTN PRINT_PROGRESS
     export -f transcribe_one run_whisper output_exists get_output_base conv_to_wav NEEDS_CONVERT log info ok warn err
     export RED GREEN YELLOW CYAN NC
 
     printf '%s\0' "${all_files[@]}" | xargs -0 -P "$PARALLEL" -I{} bash -c '
+        trap "[ -n \"$CURRENT_TMP_WAV\" ] && rm -f \"$CURRENT_TMP_WAV\"" EXIT INT TERM
         transcribe_one "$1"
         rc=$?
         h=$(printf "%s" "$1" | md5sum | cut -c1-12)
