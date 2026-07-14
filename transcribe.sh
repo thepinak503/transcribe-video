@@ -661,14 +661,14 @@ else
         pct=$((processed * 100 / total))
         echo -e "${CYAN}  → ${processed}/${total} files processed (${pct}%)${NC}"
         case "$code" in
-            0) count_passed=$((count_passed + 1)) ;;
+            0) count_passed=$((count_passed + 1))
+               if [ "$COOLDOWN" -gt 0 ] && [ "$processed" -lt "$total" ]; then
+                   info "Cooling down for ${COOLDOWN}s..."
+                   set +e; sleep "$COOLDOWN"; set -e
+               fi ;;
             2) count_skipped=$((count_skipped + 1)) ;;
             *) count_failed=$((count_failed + 1)); failed_files+=("$f") ;;
         esac
-        if [ "$COOLDOWN" -gt 0 ] && [ "$processed" -lt "$total" ]; then
-            info "Cooling down for ${COOLDOWN}s..."
-            set +e; sleep "$COOLDOWN"; set -e
-        fi
     done
 fi
 
