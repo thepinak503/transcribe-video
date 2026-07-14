@@ -73,7 +73,7 @@ NO_FLASH_ATTN=false
 TRANSLATE=false
 FFMPEG_CONVERT=true
 CURRENT_TMP_WAV=""
-COOLDOWN=0
+COOLDOWN=120
 CANCEL_REQUESTED=false
 
 # --- Colors ---
@@ -138,7 +138,7 @@ Options:
       --no-convert       Skip ffmpeg conversion for video containers
       --keep-wav         Keep converted WAV file for debugging
       --print-progress   Show whisper.cpp progress bar (stderr)
-      --cooldown SECS    Pause SECS seconds between files to avoid thermal throttling (default: 0)
+      --cooldown SECS    Pause SECS seconds between files to avoid thermal throttling (default: 120)
   -L, --log FILE         Write log to file
   -h, --help             Show this help
   -b, --background       Run in background (auto-log to ~/transcribe-<date>.log)
