@@ -4,6 +4,27 @@
 
 set -Euo pipefail
 
+LOCK_FILE="$HOME/.transcribe.lck"
+
+# --- Single-instance lock (stale PID auto-clears) ---
+acquire_lock() {
+    if [ -f "$LOCK_FILE" ]; then
+        local old_pid
+        old_pid=$(cat "$LOCK_FILE" 2>/dev/null || echo "")
+        if [ -n "$old_pid" ] && kill -0 "$old_pid" 2>/dev/null; then
+            err "Another transcription is already running (PID $old_pid)"
+            err "  Lock file: $LOCK_FILE"
+            err "  Wait for it to finish or run: rm -f \"$LOCK_FILE\""
+            exit 1
+        fi
+        rm -f "$LOCK_FILE"
+    fi
+    echo "$$" > "$LOCK_FILE"
+}
+release_lock() {
+    [ -f "$LOCK_FILE" ] && [ "$(cat "$LOCK_FILE" 2>/dev/null)" = "$$" ] && rm -f "$LOCK_FILE"
+}
+
 # --- Early check: --background / -b (before getopt) ---
 bg_mode=false
 filtered_args=()
@@ -52,6 +73,8 @@ NO_FLASH_ATTN=false
 TRANSLATE=false
 FFMPEG_CONVERT=true
 CURRENT_TMP_WAV=""
+COOLDOWN=0
+CANCEL_REQUESTED=false
 
 # --- Colors ---
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[0;33m'
@@ -67,9 +90,24 @@ cleanup() {
     local pids
     pids=$(jobs -rp 2>/dev/null || true)
     [ -n "$pids" ] && kill "$pids" 2>/dev/null || true
-    [ -n "$CURRENT_TMP_WAV" ] && [ -f "$CURRENT_TMP_WAV" ] && rm -f "$CURRENT_TMP_WAV"
+    [ -n "$CURRENT_TMP_WAV" ] && [ -f "$CURRENT_TMP_WAV" ] && rm -f "$CURRENT_TMP_WAV" || true
+    release_lock
+    return 0
 }
-trap cleanup EXIT INT TERM
+trap cleanup EXIT TERM
+handle_sigint() {
+    if [ "$CANCEL_REQUESTED" = true ]; then
+        echo "" >&2
+        err "Force-cancelling..."
+        exit 1
+    fi
+    CANCEL_REQUESTED=true
+    echo "" >&2
+    warn "Ctrl+C pressed — finishing current file, then stopping"
+    warn "Press Ctrl+C again to force-cancel immediately"
+    release_lock
+}
+trap handle_sigint INT
 
 usage() {
     cat <<EOF
@@ -100,6 +138,7 @@ Options:
       --no-convert       Skip ffmpeg conversion for video containers
       --keep-wav         Keep converted WAV file for debugging
       --print-progress   Show whisper.cpp progress bar (stderr)
+      --cooldown SECS    Pause SECS seconds between files to avoid thermal throttling (default: 0)
   -L, --log FILE         Write log to file
   -h, --help             Show this help
   -b, --background       Run in background (auto-log to ~/transcribe-<date>.log)
@@ -108,7 +147,7 @@ EOF
 
 # --- Parse args ---
 TEMP=$(getopt -o bm:t:l:p:f:o:s:S:nqRvL:h \
-    --long model:,threads:,lang:,parallel:,formats:,outdir:,min-size:,max-size:,no-skip,no-recursive,dry-run,quiet,verbose,many-vids,background,keep-wav,vad,vad-model:,translate,no-gpu,no-flash-attn,no-convert,print-progress,log:,help \
+    --long model:,threads:,lang:,parallel:,formats:,outdir:,min-size:,max-size:,no-skip,no-recursive,dry-run,quiet,verbose,many-vids,background,keep-wav,vad,vad-model:,translate,no-gpu,no-flash-attn,no-convert,print-progress,cooldown:,log:,help \
     -n "$(basename "$0")" -- "$@") || { usage; exit 1; }
 eval set -- "$TEMP"
 
@@ -137,6 +176,7 @@ while true; do
         --no-convert)        FFMPEG_CONVERT=false; shift ;;
         --keep-wav)          KEEP_WAV=true; shift ;;
         --print-progress)    PRINT_PROGRESS=true; shift ;;
+        --cooldown)          COOLDOWN="$2"; shift 2 ;;
         -L|--log)            LOG_FILE="$2"; shift 2 ;;
         -h|--help)           usage; exit 0 ;;
         --)                  shift; break ;;
@@ -302,6 +342,11 @@ if [ "$VAD" = true ] && [ -z "$VAD_MODEL" ]; then
     exit 1
 fi
 
+# --- Single-instance lock ---
+if [ "$DRY_RUN" = false ]; then
+    acquire_lock
+fi
+
 # --- Find files ---
 find_files() {
     local path="$1" resolved
@@ -435,10 +480,12 @@ run_whisper() {
     fi
     cmd+=(-of "$out_base")
 
+    local had_errexit=false
+    shopt -qo errexit && had_errexit=true
     set +e
     "${cmd[@]}"
     local rc=$?
-    set -e
+    $had_errexit && set -e
     [ -n "$tmp_wav" ] && [ "$KEEP_WAV" = false ] && rm -f "$tmp_wav"
     CURRENT_TMP_WAV=""
     return "$rc"
@@ -485,11 +532,10 @@ transcribe_one() {
         log "DONE  $f"
         return 0
     else
-        local exit_code
-        exit_code=$?
-        echo -e "${RED}FAIL${NC}  $f (exit $exit_code)"
-        log "FAIL  $f (exit $exit_code)"
-        return "$exit_code"
+        local _ec=$?
+        echo -e "${RED}FAIL${NC}  $f (exit $_ec)"
+        log "FAIL  $f (exit $_ec)"
+        return "$_ec"
     fi
 }
 
@@ -554,12 +600,13 @@ count_skipped=0
 failed_files=()
 
 if [ "$PARALLEL" -gt 1 ]; then
+    [ "$CANCEL_REQUESTED" = true ] && { warn "Cancelled by user"; exit 1; }
     info "Processing $total file(s) with $PARALLEL parallel job(s)..."
 
     temp_dir=$(mktemp -d)
     trap 'cleanup; rm -rf "$temp_dir"' EXIT
     export TEMP_DIR="$temp_dir"
-    export WHISPER_BIN FFMPEG_CONVERT OUTDIR MODEL LANGUAGE THREADS FORMATS MIN_SIZE MAX_SIZE CURRENT_TMP_WAV KEEP_WAV
+    export WHISPER_BIN FFMPEG_CONVERT OUTDIR MODEL LANGUAGE THREADS FORMATS MIN_SIZE MAX_SIZE CURRENT_TMP_WAV KEEP_WAV COOLDOWN
     export SKIP_EXISTING QUIET VERBOSE LOG_FILE VAD VAD_MODEL TRANSLATE NO_GPU NO_FLASH_ATTN PRINT_PROGRESS
     parallel_worker() {
         local f="$1" rc h
@@ -604,6 +651,7 @@ if [ "$PARALLEL" -gt 1 ]; then
 else
     processed=0
     for f in "${all_files[@]}"; do
+        [ "$CANCEL_REQUESTED" = true ] && break
         code=0
         set +e
         transcribe_one "$f"
@@ -617,6 +665,10 @@ else
             2) count_skipped=$((count_skipped + 1)) ;;
             *) count_failed=$((count_failed + 1)); failed_files+=("$f") ;;
         esac
+        if [ "$COOLDOWN" -gt 0 ] && [ "$processed" -lt "$total" ]; then
+            info "Cooling down for ${COOLDOWN}s..."
+            set +e; sleep "$COOLDOWN"; set -e
+        fi
     done
 fi
 
@@ -630,3 +682,7 @@ echo -e "  Failed:  ${RED}$count_failed${NC}"
 [ "${#failed_files[@]}" -gt 0 ] && for ff in "${failed_files[@]}"; do echo "    - $ff"; done
 [ -n "$LOG_FILE" ] && echo -e "  Log:     ${CYAN}$LOG_FILE${NC}"
 echo ""
+
+if command -v notify-send &>/dev/null; then
+    notify-send "Transcription Complete" "Done: $count_passed  Skipped: $count_skipped  Failed: $count_failed" 2>/dev/null || true
+fi
