@@ -384,13 +384,12 @@ get_output_base() {
     fi
 }
 
-# --- Check if all requested output formats already exist and are fresh ---
+# --- Check if all requested output formats already exist ---
 output_exists() {
     local f="$1" out_base ext
     out_base=$(get_output_base "$f")
     ext="${f##*.}"
-    local src_mtime
-    src_mtime=$(stat -c%Y "$f" 2>/dev/null || echo 0)
+    local fmts
     IFS=',' read -ra fmts <<< "$FORMATS"
     for fmt in "${fmts[@]}"; do
         local out_file=""
@@ -406,9 +405,6 @@ output_exists() {
         [ -n "$out_file" ] || return 1
         [ -f "$out_file" ] || return 1
         [ -s "$out_file" ] || return 1
-        local out_mtime
-        out_mtime=$(stat -c%Y "$out_file" 2>/dev/null || echo 0)
-        [ "$out_mtime" -ge "$src_mtime" ] || return 1
     done
     return 0
 }
@@ -457,6 +453,7 @@ run_whisper() {
         [ -n "$VAD_MODEL" ] && cmd+=(-vm "$VAD_MODEL")
     fi
 
+    local fmts
     IFS=',' read -ra fmts <<< "$FORMATS"
     for fmt in "${fmts[@]}"; do
         case "$fmt" in
